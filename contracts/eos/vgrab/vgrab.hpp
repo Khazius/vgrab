@@ -2,199 +2,102 @@
  *  @file
  *  @copyright defined in eos/LICENSE.txt
  */
+#pragma once
 
-#include "vgrab.hpp"
+#include "../dappservices/log.hpp"
+#include "../dappservices/plist.hpp"
+#include "../dappservices/plisttree.hpp"
+#include "../dappservices/multi_index.hpp"
 
-using namespace eosio;
+#define DAPPSERVICES_ACTIONS() \
+  XSIGNAL_DAPPSERVICE_ACTION \
+  LOG_DAPPSERVICE_ACTIONS \
+  IPFS_DAPPSERVICE_ACTIONS
 
-ACTION vgrab::create( name issuer,
-                    asset        maximum_supply)
+#define DAPPSERVICE_ACTIONS_COMMANDS() \
+  IPFS_SVC_COMMANDS()LOG_SVC_COMMANDS() 
+
+#define CONTRACT_NAME() vgrab
+
+namespace eosiosystem {
+   class system_contract;
+}
+
+using std::string;
+
+
+                
+CONTRACT_START()
+   public:
+
+      ACTION create( name issuer,
+                   asset        maximum_supply);
+
+      ACTION issue( name to, asset quantity, string memo );
+      
+      
+      ACTION coldissue( name to, asset quantity, string memo );
+      
+      ACTION coldtrans( name from, name to, asset quantity, string memo );
+      
+      ACTION store( name from, asset quantity);
+      ACTION withdraw( name to, asset quantity);
+
+      ACTION transfer( name from,
+                     name to,
+                     asset        quantity,
+                     string       memo );
+      
+      inline asset get_supply( symbol_code sym )const;
+      
+      inline asset get_balance( name owner, symbol_code sym )const;
+
+   private:
+      TABLE account {
+         asset    balance;
+         uint64_t primary_key()const { return balance.symbol.code().raw(); }
+      };
+      
+      TABLE currency_stats {
+         asset          supply;
+         asset          max_supply;
+         name   issuer;
+
+         uint64_t primary_key()const { return supply.symbol.code().raw(); }
+      };
+      
+      typedef dapp::multi_index<"vaccounts"_n, account> cold_accounts_t;
+      typedef eosio::multi_index<"accounts"_n, account> accounts_t;
+      typedef eosio::multi_index<"stat"_n, currency_stats> stats;
+
+
+      void sub_balance( name owner, asset value );
+      void add_balance( name owner, asset value, name ram_payer );
+      
+      void sub_cold_balance( name owner, asset value );
+      void add_cold_balance( name owner, asset value, name ram_payer );
+
+   public:
+      struct transfer_args {
+         name  from;
+         name  to;
+         asset         quantity;
+         string        memo;
+      };
+      
+CONTRACT_END((create)(issue)(transfer)(coldissue)(withdraw)(store))
+
+asset vgrab::get_supply( symbol_code sym )const
 {
-    require_auth( _self );
-
-    auto sym = maximum_supply.symbol;
-    eosio_assert( sym.is_valid(), "invalid symbol name" );
-    eosio_assert( maximum_supply.is_valid(), "invalid supply");
-    eosio_assert( maximum_supply.amount > 0, "max-supply must be positive");
-
-    stats statstable( _self, sym.code().raw() );
-    auto existing = statstable.find( sym.code().raw() );
-    eosio_assert( existing == statstable.end(), "token with symbol already exists" );
-
-    statstable.emplace( _self, [&]( auto& s ) {
-       s.supply.symbol = maximum_supply.symbol;
-       s.max_supply    = maximum_supply;
-       s.issuer        = issuer;
-    });
+   stats statstable( _self, sym.raw() );
+   const auto& st = statstable.get( sym.raw() );
+   return st.supply;
 }
 
-
-ACTION vgrab::issue( name to, asset quantity, string memo )
+asset vgrab::get_balance( name owner, symbol_code sym )const
 {
-    auto sym = quantity.symbol;
-    eosio_assert( sym.is_valid(), "invalid symbol name" );
-    eosio_assert( memo.size() <= 256, "memo has more than 256 bytes" );
-
-    auto sym_name = sym.code().raw();
-    stats statstable( _self, sym_name );
-    auto existing = statstable.find( sym_name );
-    eosio_assert( existing != statstable.end(), "token with symbol does not exist, create token before issue" );
-    const auto& st = *existing;
-
-    require_auth( st.issuer );
-    eosio_assert( quantity.is_valid(), "invalid quantity" );
-    eosio_assert( quantity.amount > 0, "must issue positive quantity" );
-
-    eosio_assert( quantity.symbol == st.supply.symbol, "symbol precision mismatch" );
-    eosio_assert( quantity.amount <= st.max_supply.amount - st.supply.amount, "quantity exceeds available supply");
-
-    statstable.modify( st, eosio::same_payer, [&]( auto& s ) {
-       s.supply += quantity;
-    });
-
-    add_balance( st.issuer, quantity, st.issuer );
-
-    if( to != st.issuer ) {
-       SEND_INLINE_ACTION( *this, transfer, {st.issuer,"active"_n}, {st.issuer, to, quantity, memo} );
-    }
+   accounts_t accountstable( _self, owner.value );
+   const auto& ac = accountstable.get( sym.raw() );
+   return ac.balance;
 }
 
-ACTION vgrab::coldissue( name to, asset quantity, string memo )
-{
-    auto sym = quantity.symbol;
-    eosio_assert( sym.is_valid(), "invalid symbol name" );
-    eosio_assert( memo.size() <= 256, "memo has more than 256 bytes" );
-
-    auto sym_name = sym.code().raw();
-    stats statstable( _self, sym_name );
-    auto existing = statstable.find( sym_name );
-    eosio_assert( existing != statstable.end(), "token with symbol does not exist, create token before issue" );
-    const auto& st = *existing;
-
-    require_auth( st.issuer );
-    eosio_assert( quantity.is_valid(), "invalid quantity" );
-    eosio_assert( quantity.amount > 0, "must issue positive quantity" );
-
-    eosio_assert( quantity.symbol == st.supply.symbol, "symbol precision mismatch" );
-    eosio_assert( quantity.amount <= st.max_supply.amount - st.supply.amount, "quantity exceeds available supply");
-
-    statstable.modify( st, eosio::same_payer, [&]( auto& s ) {
-       s.supply += quantity;
-    });
-
-    add_cold_balance( to, quantity, st.issuer );
-}
-ACTION vgrab::transfer( name from,
-                      name to,
-                      asset        quantity,
-                      string       memo )
-{
-    eosio_assert( from != to, "cannot transfer to self" );
-    require_auth( from );
-    eosio_assert( is_account( to ), "to account does not exist");
-    auto sym = quantity.symbol.code().raw();
-    stats statstable( _self, sym );
-    const auto& st = statstable.get( sym );
-
-    require_recipient( from );
-    require_recipient( to );
-
-    eosio_assert( quantity.is_valid(), "invalid quantity" );
-    eosio_assert( quantity.amount > 0, "must transfer positive quantity" );
-    eosio_assert( quantity.symbol == st.supply.symbol, "symbol precision mismatch" );
-    eosio_assert( memo.size() <= 256, "memo has more than 256 bytes" );
-
-    sub_balance( from, quantity);
-    add_balance( to, quantity, from);
-}
-
-ACTION vgrab::store( name from, asset quantity){
-    require_auth( from );
-    auto sym = quantity.symbol.code().raw();
-    stats statstable( _self, sym );
-    const auto& st = statstable.get( sym );
-
-    require_recipient( from );
-
-    eosio_assert( quantity.is_valid(), "invalid quantity" );
-    eosio_assert( quantity.amount > 0, "must store positive quantity" );
-    eosio_assert( quantity.symbol == st.supply.symbol, "symbol precision mismatch" );
-    
-    sub_balance( from, quantity);
-    add_cold_balance( from, quantity, from);
-}
-
-ACTION vgrab::withdraw( name to, asset quantity){
-    require_auth( to );
-    auto sym = quantity.symbol.code().raw();
-    stats statstable( _self, sym );
-    const auto& st = statstable.get( sym );
-
-    require_recipient( to );
-
-    eosio_assert( quantity.is_valid(), "invalid quantity" );
-    eosio_assert( quantity.amount > 0, "must withdraw positive quantity" );
-    eosio_assert( quantity.symbol == st.supply.symbol, "symbol precision mismatch" );
-    
-    sub_cold_balance( to, quantity);
-    add_balance( to, quantity, to);  
-}
-void vgrab::add_balance( name owner, asset value, name ram_payer)
-{
-   accounts_t to_acnts( _self, owner.value );
-   auto to = to_acnts.find( value.symbol.code().raw() );
-   if( to == to_acnts.end() ) {
-      to_acnts.emplace(ram_payer, [&]( auto& a ){
-        a.balance = value;
-      });
-   } else {
-      to_acnts.modify( *to, ram_payer, [&]( auto& a ) {
-        a.balance += value;
-      });
-   }
-}
-
-void vgrab::sub_balance( name owner, asset value)
-{
-   accounts_t from_acnts( _self, owner.value );
-  const auto& from = from_acnts.get( value.symbol.code().raw(), "no balance object found" );
-   eosio_assert( from.balance.amount >= value.amount, "overdrawn balance" );
-  if( from.balance.amount == value.amount ) {
-      from_acnts.erase( from );
-  } else {
-      from_acnts.modify( from, eosio::same_payer, [&]( auto& a ) {
-          a.balance -= value;
-      });
-  }
-}
-
-
-
-void vgrab::add_cold_balance( name owner, asset value, name ram_payer)
-{
-   cold_accounts_t to_acnts( _self, owner.value );
-   auto to = to_acnts.find( value.symbol.code().raw() );
-   if( to == to_acnts.end() ) {
-      to_acnts.emplace(ram_payer, [&]( auto& a ){
-        a.balance = value;
-      });
-   } else {
-      to_acnts.modify( *to, ram_payer, [&]( auto& a ) {
-        a.balance += value;
-      });
-   }
-}
-
-void vgrab::sub_cold_balance( name owner, asset value)
-{
-   cold_accounts_t from_acnts( _self, owner.value );
-  const auto& from = from_acnts.get( value.symbol.code().raw(), "no balance object found" );
-   eosio_assert( from.balance.amount >= value.amount, "overdrawn balance" );
-  if( from.balance.amount == value.amount ) {
-      from_acnts.erase( from );
-  } else {
-      from_acnts.modify( from, eosio::same_payer, [&]( auto& a ) {
-          a.balance -= value;
-      });
-  }
-}
