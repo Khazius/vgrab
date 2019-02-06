@@ -19,8 +19,8 @@ describe(`${contractCode} Contract`, () => {
 
     var testcontract;
 
-    const code = 'airairairair';
-    const code2 = 'airairairai2';
+    const code = 'airairairai1';
+    const code2 = 'testuser5';
     var account = code;
 
 
