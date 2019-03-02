@@ -8,5 +8,5 @@ https://github.com/liquidapps-io/zeus-cmd
 ```
 zeus unbox vgrab
 cd vgrab
-zeus test
+DEMUX_BACKEND=state_history_plugin zeus test
 ```
