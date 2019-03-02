@@ -24,8 +24,6 @@ namespace eosiosystem {
 }
 
 using std::string;
-
-
                 
 CONTRACT_START()
    public:
@@ -58,6 +56,11 @@ CONTRACT_START()
          uint64_t primary_key()const { return balance.symbol.code().raw(); }
       };
       
+      struct [[eosio::table]] vramaccounts {
+         asset    balance;
+         uint64_t primary_key()const { return balance.symbol.code().raw(); }
+      };
+      
       TABLE currency_stats {
          asset          supply;
          asset          max_supply;
@@ -65,8 +68,15 @@ CONTRACT_START()
 
          uint64_t primary_key()const { return supply.symbol.code().raw(); }
       };
+      typedef dapp::multi_index<"vaccounts"_n, vramaccounts> cold_accounts_t;
+      typedef eosio::multi_index<".vaccounts"_n, vramaccounts> cold_accounts_t_v_abi;
+      TABLE shardbucket {
+          std::vector<char> shard_uri;
+          uint64_t shard;
+          uint64_t primary_key() const { return shard; }
+      };
+      typedef eosio::multi_index<"vaccounts"_n, shardbucket> cold_accounts_t_abi;
       
-      typedef dapp::multi_index<"vaccounts"_n, account> cold_accounts_t;
       typedef eosio::multi_index<"accounts"_n, account> accounts_t;
       typedef eosio::multi_index<"stat"_n, currency_stats> stats;
 
